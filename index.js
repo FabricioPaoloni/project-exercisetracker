@@ -89,6 +89,7 @@ app.get('/api/users', async function (req, res) {
 
 //create the Schema to post new exercises
 const exerciseSchema = new mongoose.Schema({
+  user_id: String,
   username: String,
   description: String,
   duration: Number,
@@ -123,6 +124,7 @@ app.post('/api/users/:_id/exercises', async function (req, res) {
 
 
         let findExercise = await Exercise.findOne({
+          user_id: validUser._id,
           username: validUser.username,
           description: req.body.description,
           duration: req.body.duration,
@@ -131,6 +133,7 @@ app.post('/api/users/:_id/exercises', async function (req, res) {
 
         if (findExercise) {
           return res.json({
+            _id: validUser._id,
             username: findExercise.username,
             description: findExercise.description,
             duration: findExercise.duration,
@@ -139,19 +142,20 @@ app.post('/api/users/:_id/exercises', async function (req, res) {
           })
         } else {
           let newExercise = new Exercise({
+            user_id: validUser._id,
             username: validUser.username,
             description: req.body.description,
             duration: req.body.duration,
             date: dateSupplied
           })
 
-          newExercise.save();
+          const savedExercise = await newExercise.save();
           res.json({
-            username: newExercise.username,
-            description: newExercise.description,
-            duration: newExercise.duration,
-            date: newExercise.date.toDateString(),
-            _id: newExercise._id
+            _id: savedExercise.user_id,
+            username: savedExercise.username,
+            description: savedExercise.description,
+            duration: savedExercise.duration,
+            date: savedExercise.date.toDateString(),
           })
         }
       }
@@ -183,36 +187,45 @@ app.post('/api/users/:_id/exercises', async function (req, res) {
 // }
 app.get('/api/users/:_id/logs', async function (req, res) {
   //get the username
-  try {
 
-    let findUser = await User.findOne({ _id: req.params._id });
-    if (!findUser) {
-      return res.json({ error: 'User not found. Try again with a valid ID' });
-    }
-    try {
-      let exercisesArray = await Exercise.find({ username: findUser.username }, 'description duration date');
-      let exercisesArrayParsed = [];
-      for (let i = 0; i < exercisesArray.length; i++) {
-        exercisesArrayParsed.push({
-          description: exercisesArray[i].description,
-          duration: exercisesArray[i].duration,
-          date: exercisesArray[i].date.toDateString()
-        })
-      }
-      res.json({
-        username: findUser.username,
-        count: exercisesArray.length,
-        _id: findUser._id,
-        log: exercisesArrayParsed
-      })
-    }
-    catch (error2) {
-      console.log(error2);
-      res.status(500).json({ error: 'An error has ocurred while getting the logs, please try again' })
-    }
+
+  let findUser = await User.findOne({ _id: req.params._id });
+  if (!findUser) { //if no user matches, return an error.
+    return res.json({ error: 'User not found. Try again with a valid ID' });
   }
-  catch (error1) {
-    console.error(error1);
-    res.status(500).json({ error: 'An error has ocurred while getting the user, please try again' });
-  }
+  let fromDate = new Date(0);
+  let toDate = new Date();
+  let limit;
+  req.query.limit ? limit = parseInt(req.query.limit) : limit = 0;
+  if (isNaN(limit)) { return res.json({ error: 'limit is not a valid number. Please try again' }) }
+
+  req.query.from ? fromDate = new Date(req.query.from) : fromDate = fromDate;
+  req.query.to ? toDate = new Date(req.query.to) : toDate = toDate;
+  req.query.limit ? limit = req.query.limit : limit = null;
+
+  if (fromDate == 'Invalid Date') { return res.json({ error: 'FROM date is invalid' }) }
+  if (toDate == 'Invalid Date') { return res.json({ error: 'TO date is invalid' }) }
+
+
+  //catch all the exercises that belong to the supplied user.
+  let exercisesArray = await Exercise.find({
+    user_id: findUser._id,
+    date: { $gte: fromDate, $lte: toDate }
+  })
+    .select('description duration date')
+    .limit(limit)
+    .exec();
+  let log = exercisesArray.map(e => ({
+      description: e.description,
+      duration: e.duration,
+      date: e.date.toDateString()
+    }))
+  res.json({
+    username: findUser.username,
+    count: exercisesArray.length,
+    _id: findUser._id,
+    log: log,
+  })
+
+
 })
