@@ -58,7 +58,7 @@ app.post('/api/users', async function (req, res) {
         username: newUsername
       })
 
-      findUser.save();
+      await findUser.save();
       res.json({
         username: findUser.username,
         _id: findUser._id
@@ -89,8 +89,7 @@ app.get('/api/users', async function (req, res) {
 
 //create the Schema to post new exercises
 const exerciseSchema = new mongoose.Schema({
-  user_id: String,
-  username: String,
+  user_id: { type: String, required: true},
   description: String,
   duration: Number,
   date: Date
@@ -102,76 +101,31 @@ const Exercise = mongoose.model('Exercise', exerciseSchema, 'exercises');
 //POST a new exercise for an specific _id with the parameters: description, duration and date(optional)
 app.post('/api/users/:_id/exercises', async function (req, res) {
   try {
-    const validUser = await User.findOne({ _id: req.params._id });
+    const validUser = await User.findById(req.params._id);
     //validate the ID requested before continue.
     if (!validUser) {
       return res.json({ error: 'ID not found, try again with a valid ID.' })
     } else {
-      try {
-
-        //validate description and duration parameters.
-        if (!req.body.description | !req.body.duration) {
-          return res.json({ error: 'invalid description or duration data. Try again with a valid string for -description- and a valid number for -duration-. If no -date- is supplied, the current date will be used.' })
-        }
-        //select between the date supplied by de user or the current date if no date was supplied.
-        let dateSupplied = null;
-        if (req.body.date === null | req.body.date === "") {
-          let currentDate = new Date();
-          dateSupplied = new Date(`${currentDate.getFullYear()}-${currentDate.getMonth() + 1}-${currentDate.getDate()}`)
-        } else {
-          dateSupplied = new Date(req.body.date);
-        }
-
-
-        let findExercise = await Exercise.findOne({
-          user_id: validUser._id,
-          username: validUser.username,
-          description: req.body.description,
-          duration: req.body.duration,
-          date: dateSupplied
-        })
-
-        if (findExercise) {
-          return res.json({
-            _id: validUser._id,
-            username: findExercise.username,
-            description: findExercise.description,
-            duration: findExercise.duration,
-            date: findExercise.date.toDateString(),
-            note: 'The exercise has already been added to the database'
-          })
-        } else {
-          let newExercise = new Exercise({
-            user_id: validUser._id,
-            username: validUser.username,
-            description: req.body.description,
-            duration: req.body.duration,
-            date: dateSupplied
-          })
-
-          const savedExercise = await newExercise.save();
-          res.json({
-            _id: savedExercise.user_id,
-            username: savedExercise.username,
-            description: savedExercise.description,
-            duration: savedExercise.duration,
-            date: savedExercise.date.toDateString(),
-          })
-        }
-      }
-
-      catch (error2) {
-        console.error(error2);
-        res.status(500).json({ error: 'An error has ocurred while posting an exercise' })
-      }
-
+      const newExercise = new Exercise({
+        user_id: validUser._id,
+        description: req.body.description,
+        duration: req.body.duration,
+        date: req.body.date ? new Date(req.body.date) : new Date()
+      })
+      const exerciseSaved = await newExercise.save();
+      res.json({
+        _id: validUser._id,
+        username: validUser.username,
+        description: newExercise.description,
+        duration: newExercise.duration,
+        date: newExercise.date.toDateString()
+      })
     }
   }
-  catch (error1) {
-    console.error(error1);
-    res.status(500).json({ error: 'ID not found, try again with a valid ID.' })
+  catch (error2) {
+    console.error(error2);
+    res.json({ error: 'An error has ocurred while posting an exercise' })
   }
-
 })
 
 //GET the logs of exercise that belong to a specific user in the format:
@@ -185,47 +139,40 @@ app.post('/api/users/:_id/exercises', async function (req, res) {
 //     date: "Mon Jan 01 1990",
 //   }]
 // }
-app.get('/api/users/:_id/logs', async function (req, res) {
-  //get the username
-
-
-  let findUser = await User.findOne({ _id: req.params._id });
-  if (!findUser) { //if no user matches, return an error.
-    return res.json({ error: 'User not found. Try again with a valid ID' });
+app.get('/api/users/:_id/logs', async (req, res) => {
+  const { from, to, limit } = req.query;
+  const id = req.params._id;
+  const user = await User.findById(id);
+  if(!user){
+    res.send('Could not find user. Try again with a valid ID');
+    return
   }
-  let fromDate = new Date(0);
-  let toDate = new Date();
-  let limit;
-  req.query.limit ? limit = parseInt(req.query.limit) : limit = 0;
-  if (isNaN(limit)) { return res.json({ error: 'limit is not a valid number. Please try again' }) }
+  let dateObj = {};
+  if (from) {
+    dateObj['$gte'] = new Date(from);
+  }
+  if(to){
+    dateObj['$lte'] = new Date(to);
+  }
+  let filter = {
+    user_id: id,
+  }
+  if(from || to){
+    filter.date = dateObj;
+  }
 
-  req.query.from ? fromDate = new Date(req.query.from) : fromDate = fromDate;
-  req.query.to ? toDate = new Date(req.query.to) : toDate = toDate;
-  req.query.limit ? limit = req.query.limit : limit = null;
+  const exercisesArray = await Exercise.find(filter).limit(+limit ?? 500);
+  const log = exercisesArray.map(e => ({
+    description: e.description,
+    duration: e.duration,
+    date: e.date.toDateString()
+  }))
 
-  if (fromDate == 'Invalid Date') { return res.json({ error: 'FROM date is invalid' }) }
-  if (toDate == 'Invalid Date') { return res.json({ error: 'TO date is invalid' }) }
-
-
-  //catch all the exercises that belong to the supplied user.
-  let exercisesArray = await Exercise.find({
-    user_id: findUser._id,
-    date: { $gte: fromDate, $lte: toDate }
-  })
-    .select('description duration date')
-    .limit(limit)
-    .exec();
-  let log = exercisesArray.map(e => ({
-      description: e.description,
-      duration: e.duration,
-      date: e.date.toDateString()
-    }))
   res.json({
-    username: findUser.username,
+    username: user.username,
     count: exercisesArray.length,
-    _id: findUser._id,
-    log: log,
+    _id: user._id,
+    log: log
   })
-
 
 })
